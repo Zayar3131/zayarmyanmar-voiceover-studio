@@ -31,6 +31,7 @@ def fmt(v, unit):
 
 
 def ms_to_srt_time(ms):
+    ms = max(0, ms)
     h = int(ms // 3600000)
     m = int((ms % 3600000) // 60000)
     s = int((ms % 60000) // 1000)
@@ -57,6 +58,23 @@ def build_srt(words, per_cue):
     return "\n".join(lines)
 
 
+def build_srt_fallback(text, total_ms, per_cue):
+    import re
+    words = re.findall(r"\S+", text)
+    if not words or total_ms <= 0:
+        return ""
+    groups = [words[i:i + per_cue] for i in range(0, len(words), per_cue)]
+    ms_per_word = total_ms / len(words)
+    lines = []
+    cursor = 0.0
+    for idx, g in enumerate(groups, start=1):
+        start = cursor
+        end = cursor + ms_per_word * len(g)
+        lines.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{' '.join(g)}\n")
+        cursor = end
+    return "\n".join(lines)
+
+
 async def synthesize(text, voice, rate_str, pitch_str):
     communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str)
     audio_bytes = b""
@@ -77,7 +95,14 @@ if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=T
             audio_bytes, words = asyncio.run(
                 synthesize(text, voice, fmt(rate, "%"), fmt(pitch, "Hz"))
             )
-            srt_text = build_srt(words, words_per_cue)
+            if words:
+                srt_text = build_srt(words, words_per_cue)
+            else:
+                word_count = max(1, len(text.split()))
+                speed_factor = 1 + (rate / 100)
+                est_ms = (word_count / (3.2 * speed_factor)) * 1000
+                srt_text = build_srt_fallback(text, est_ms, words_per_cue)
+                st.info("Word-timing data မရလို့ SRT ကို ခန့်မှန်းချိန်ဖြင့် ဖန်တီးထားပါသည် (timing အနည်းငယ် မတိကျနိုင်ပါ)")
         st.success("ပြီးပါပြီ ✅")
         st.audio(audio_bytes, format="audio/mp3")
         c1, c2 = st.columns(2)
