@@ -87,6 +87,10 @@ async def synthesize(text, voice, rate_str, pitch_str):
     return audio_bytes, words
 
 
+if "audio_bytes" not in st.session_state:
+    st.session_state.audio_bytes = None
+    st.session_state.srt_text = None
+
 if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=True):
     if not text.strip():
         st.warning("စာသား ထည့်ပါ")
@@ -103,16 +107,20 @@ if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=T
                 est_ms = (word_count / (3.2 * speed_factor)) * 1000
                 srt_text = build_srt_fallback(text, est_ms, words_per_cue)
                 st.info("Word-timing data မရလို့ SRT ကို ခန့်မှန်းချိန်ဖြင့် ဖန်တီးထားပါသည် (timing အနည်းငယ် မတိကျနိုင်ပါ)")
-        st.success("ပြီးပါပြီ ✅")
-        st.audio(audio_bytes, format="audio/mp3")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button("🔊 Audio (MP3)", audio_bytes, file_name="voiceover.mp3",
-                                mime="audio/mpeg", use_container_width=True)
-        with c2:
-            st.download_button("📝 SRT ဖိုင်", srt_text, file_name="voiceover.srt",
-                                mime="text/plain", use_container_width=True)
-        with st.expander("SRT preview"):
-            st.text(srt_text[:2000])
+        st.session_state.audio_bytes = audio_bytes
+        st.session_state.srt_text = srt_text
+
+if st.session_state.audio_bytes:
+    st.success("ပြီးပါပြီ ✅")
+    st.audio(st.session_state.audio_bytes, format="audio/mp3")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("🔊 Audio (MP3)", st.session_state.audio_bytes, file_name="voiceover.mp3",
+                            mime="audio/mpeg", use_container_width=True, key="dl_audio")
+    with c2:
+        st.download_button("📝 SRT ဖိုင်", st.session_state.srt_text, file_name="voiceover.srt",
+                            mime="text/plain", use_container_width=True, key="dl_srt")
+    with st.expander("SRT preview"):
+        st.text(st.session_state.srt_text[:2000])
 
 st.caption("Myanmar Voiceover Studio · Edge TTS · my-MM-ThihaNeural / my-MM-NilarNeural · Unlimited Words")
