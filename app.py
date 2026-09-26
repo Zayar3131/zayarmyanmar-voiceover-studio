@@ -1,6 +1,8 @@
 import streamlit as st
 import edge_tts
 import asyncio
+import io
+from mutagen.mp3 import MP3
 
 st.set_page_config(page_title="မြန်မာ Voiceover Studio", page_icon="🎙️", layout="centered")
 
@@ -102,11 +104,14 @@ if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=T
             if words:
                 srt_text = build_srt(words, words_per_cue)
             else:
-                word_count = max(1, len(text.split()))
-                speed_factor = 1 + (rate / 100)
-                est_ms = (word_count / (3.2 * speed_factor)) * 1000
-                srt_text = build_srt_fallback(text, est_ms, words_per_cue)
-                st.info("Word-timing data မရလို့ SRT ကို ခန့်မှန်းချိန်ဖြင့် ဖန်တီးထားပါသည် (timing အနည်းငယ် မတိကျနိုင်ပါ)")
+                try:
+                    total_ms = MP3(io.BytesIO(audio_bytes)).info.length * 1000
+                except Exception:
+                    word_count = max(1, len(text.split()))
+                    speed_factor = 1 + (rate / 100)
+                    total_ms = (word_count / (1.8 * speed_factor)) * 1000
+                srt_text = build_srt_fallback(text, total_ms, words_per_cue)
+                st.info("Word-timing data မရလို့ SRT ကို အသံဖိုင်ရဲ့ တကယ့်ကြာချိန်ဖြင့် ဖန်တီးထားပါသည်")
         st.session_state.audio_bytes = audio_bytes
         st.session_state.srt_text = srt_text
 
