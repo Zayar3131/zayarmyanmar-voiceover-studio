@@ -82,7 +82,7 @@ def build_srt_from_whisper_words(words, per_cue):
 
 def transcribe_via_hf(audio_bytes, hf_token):
     import requests
-    api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    api_url = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
     headers = {"Authorization": f"Bearer {hf_token}"}
     params = {"return_timestamps": "word"}
     resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=120)
