@@ -80,6 +80,26 @@ def build_srt_from_whisper_words(words, per_cue):
     return "\n".join(lines)
 
 
+def transcribe_via_hf(audio_bytes, hf_token):
+    import requests
+    api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    headers = {"Authorization": f"Bearer {hf_token}"}
+    params = {"return_timestamps": "word"}
+    resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=120)
+    if resp.status_code != 200:
+        raise RuntimeError(f"{resp.status_code}: {resp.text[:300]}")
+    result = resp.json()
+    if "error" in result:
+        raise RuntimeError(result["error"])
+    words = []
+    for chunk in result.get("chunks", []):
+        ts = chunk.get("timestamp", [None, None])
+        if ts[0] is None or ts[1] is None:
+            continue
+        words.append({"start": ts[0], "end": ts[1], "text": chunk["text"]})
+    return words, result.get("text", "")
+
+
 async def synthesize(text, voice, rate_str, pitch_str, volume_str):
     communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str, volume=volume_str)
     audio_bytes = b""
@@ -90,12 +110,6 @@ async def synthesize(text, voice, rate_str, pitch_str, volume_str):
         elif chunk["type"] == "WordBoundary":
             words.append(chunk)
     return audio_bytes, words
-
-
-@st.cache_resource(show_spinner=False)
-def load_whisper_model(model_size):
-    from faster_whisper import WhisperModel
-    return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
 st.title("🎙️ မြန်မာ Voiceover Studio")
@@ -159,40 +173,30 @@ with tab1:
             st.text(st.session_state.srt_text[:2000])
 
 with tab2:
-    st.caption("မိမိသီချင်းသွင်းထားသော (voice clone) အသံဖိုင်ကို တင်ပြီး တိကျသော SRT ဖိုင် ထုတ်ယူနိုင်ပါသည်")
-    st.warning("⚠️ Free hosting ဖြစ်၍ model load ချိန်တွင် ပထမဆုံးအကြိမ် နှေးနိုင်ပါသည် (~1-2 မိနစ်)။ Model အကြီးရွေးလျှင် app crash ဖြစ်နိုင်ခြေ ပိုများပါသည်")
-
-    model_size = st.selectbox("🧠 Model အရွယ်အစား", ["tiny", "base", "small"], index=1,
-                               help="tiny=အမြန်ဆုံး/တိကျမှုနည်း, small=တိကျမှုပိုများ/နှေးပြီး crash ဖြစ်နိုင်ခြေများ")
+    st.caption("မိမိသီချင်းသွင်းထားသော (voice clone) အသံဖိုင်ကို တင်ပြီး တိကျသော SRT ဖိုင် ထုတ်ယူနိုင်ပါသည် (Whisper large-v3, Hugging Face free API)")
+    hf_token = st.text_input("🔑 Hugging Face Access Token", type="password",
+                              help="huggingface.co → Settings → Access Tokens မှာ အခမဲ့ ယူနိုင်ပါသည်")
     audio_file = st.file_uploader("🎧 အသံဖိုင် တင်ပါ", type=["mp3", "wav", "m4a", "ogg"])
     words_per_cue2 = st.slider("📝 တစ်ကြောင်းလျှင် စာလုံးအရေအတွက်", 3, 15, 8, key="wpc2")
 
     if "stt_srt" not in st.session_state:
         st.session_state.stt_srt = None
 
-    if st.button("📝 SRT ထုတ်မည်", type="primary", use_container_width=True, disabled=(audio_file is None)):
-        with st.spinner("Model ဖွင့်နေသည် (ပထမအကြိမ်ဆို နှေးနိုင်ပါသည်)..."):
+    if st.button("📝 SRT ထုတ်မည်", type="primary", use_container_width=True,
+                 disabled=(audio_file is None or not hf_token)):
+        with st.spinner("အသံ နားထောင်ပြီး စာသား ထုတ်နေသည် (model cold-start ဖြစ်ရင် 20-30 စက္ကန့် ကြာနိုင်ပါသည်)..."):
             try:
-                model = load_whisper_model(model_size)
+                audio_file.seek(0)
+                audio_bytes = audio_file.read()
+                words, full_text = transcribe_via_hf(audio_bytes, hf_token)
+                if words:
+                    st.session_state.stt_srt = build_srt_from_whisper_words(words, words_per_cue2)
+                    st.success("ပြီးပါပြီ ✅")
+                else:
+                    st.warning("Word-timing data မရပါ — text ကတော့ ဒီလိုပါ: " + full_text[:200])
             except Exception as e:
-                st.error(f"Model load မအောင်မြင်ပါ: {e}")
-                model = None
-        if model:
-            with st.spinner("အသံ နားထောင်ပြီး စာသား ထုတ်နေသည်..."):
-                try:
-                    audio_file.seek(0)
-                    segments, info = model.transcribe(audio_file, language="my", word_timestamps=True)
-                    words = []
-                    for seg in segments:
-                        for w in seg.words:
-                            words.append({"start": w.start, "end": w.end, "text": w.word})
-                    if words:
-                        st.session_state.stt_srt = build_srt_from_whisper_words(words, words_per_cue2)
-                        st.success(f"ပြီးပါပြီ ✅ (detected language: {info.language})")
-                    else:
-                        st.warning("စကားသံ မတွေ့ပါ")
-                except Exception as e:
-                    st.error(f"Transcribe မအောင်မြင်ပါ: {e}")
+                st.error(f"မအောင်မြင်ပါ — {e}")
+                st.caption("Token မှားနေခြင်း၊ model cold-start ဖြစ်နေခြင်း (ခဏနေမှ ပြန်စမ်းပါ)၊ သို့မဟုတ် audio ဖိုင် အရမ်းရှည်ခြင်း ဖြစ်နိုင်ပါသည်")
 
     if st.session_state.stt_srt:
         st.download_button("📝 SRT ဖိုင် ဒေါင်းလုတ်", st.session_state.stt_srt, file_name="transcript.srt",
