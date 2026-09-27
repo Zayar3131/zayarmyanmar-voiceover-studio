@@ -90,7 +90,13 @@ def transcribe_via_hf(audio_bytes, hf_token, content_type="audio/mpeg"):
         "Content-Type": content_type,
         "X-Wait-For-Model": "true",
     }
-    params = {"return_timestamps": "word", "chunk_length_s": 30, "stride_length_s": 5}
+    params = {
+        "return_timestamps": "word",
+        "language": "my",
+        "task": "transcribe",
+        "chunk_length_s": 30,
+        "stride_length_s": 5,
+    }
     resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=600)
     if resp.status_code != 200:
         raise RuntimeError(f"{resp.status_code}: {resp.text[:300]}")
