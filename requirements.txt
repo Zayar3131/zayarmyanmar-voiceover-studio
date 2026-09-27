@@ -1,4 +1,4 @@
 streamlit
 edge-tts
 mutagen
-faster-whisper
+requests
