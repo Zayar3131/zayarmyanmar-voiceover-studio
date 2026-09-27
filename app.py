@@ -175,7 +175,7 @@ with tab1:
     with c2:
         pitch = st.slider("🎵 PITCH", -50, 50, 0)
     with c3:
-        volume = st.slider("🔊 VOLUME", -80, 0, -20)
+        volume = st.slider("🔊 VOLUME", -80, 200, 0)
 
     words_per_cue = st.slider("📝 တစ်ကြောင်းလျှင် စာလုံးအရေအတွက် (SRT)", 3, 15, 8)
 
@@ -216,7 +216,7 @@ with tab1:
             st.download_button("📝 SRT ဖိုင်", st.session_state.srt_text, file_name="voiceover.srt",
                                 mime="text/plain", use_container_width=True, key="dl_srt")
         with st.expander("SRT preview"):
-            st.text(st.session_state.srt_text[:2000])
+            st.text(st.session_state.srt_text)
 
 with tab2:
     st.caption("မိမိသီချင်းသွင်းထားသော (voice clone) အသံဖိုင်ကို တင်ပြီး တိကျသော SRT ဖိုင် ထုတ်ယူနိုင်ပါသည် (Whisper large-v3, Hugging Face free API)")
@@ -254,6 +254,6 @@ with tab2:
         st.download_button("📝 SRT ဖိုင် ဒေါင်းလုတ်", st.session_state.stt_srt, file_name="transcript.srt",
                             mime="text/plain", use_container_width=True, key="dl_stt_srt")
         with st.expander("SRT preview"):
-            st.text(st.session_state.stt_srt[:2000])
+            st.text(st.session_state.stt_srt)
 
 st.caption("Myanmar Voiceover Studio · Edge TTS + Whisper STT · Unlimited Words")
