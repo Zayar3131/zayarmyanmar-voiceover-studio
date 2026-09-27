@@ -83,9 +83,13 @@ def build_srt_from_whisper_words(words, per_cue):
 def transcribe_via_hf(audio_bytes, hf_token, content_type="audio/mpeg"):
     import requests
     api_url = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
-    headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": content_type}
-    params = {"return_timestamps": "word"}
-    resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=120)
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type": content_type,
+        "X-Wait-For-Model": "true",
+    }
+    params = {"return_timestamps": "word", "chunk_length_s": 30, "stride_length_s": 5}
+    resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=600)
     if resp.status_code != 200:
         raise RuntimeError(f"{resp.status_code}: {resp.text[:300]}")
     result = resp.json()
@@ -184,7 +188,7 @@ with tab2:
 
     if st.button("📝 SRT ထုတ်မည်", type="primary", use_container_width=True,
                  disabled=(audio_file is None or not hf_token)):
-        with st.spinner("အသံ နားထောင်ပြီး စာသား ထုတ်နေသည် (model cold-start ဖြစ်ရင် 20-30 စက္ကန့် ကြာနိုင်ပါသည်)..."):
+        with st.spinner("အသံ နားထောင်ပြီး စာသား ထုတ်နေသည် (audio ရှည်ရင် 3-5 မိနစ်လောက် ကြာနိုင်ပါသည်)..."):
             try:
                 audio_file.seek(0)
                 audio_bytes = audio_file.read()
