@@ -3,7 +3,9 @@ import edge_tts
 import asyncio
 import io
 import re
+import time
 from mutagen.mp3 import MP3
+from pydub import AudioSegment
 
 st.set_page_config(page_title="မြန်မာ Voiceover Studio", page_icon="🎙️", layout="centered")
 
@@ -104,6 +106,37 @@ def transcribe_via_hf(audio_bytes, hf_token, content_type="audio/mpeg"):
     return words, result.get("text", "")
 
 
+def split_audio_chunks(audio_bytes, chunk_seconds=60):
+    audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    chunk_ms = chunk_seconds * 1000
+    chunks = []
+    for start_ms in range(0, len(audio), chunk_ms):
+        piece = audio[start_ms:start_ms + chunk_ms]
+        buf = io.BytesIO()
+        piece.export(buf, format="mp3")
+        chunks.append((start_ms / 1000.0, buf.getvalue()))
+    return chunks
+
+
+def transcribe_long_audio_via_hf(audio_bytes, hf_token, progress_cb=None, chunk_seconds=60):
+    chunks = split_audio_chunks(audio_bytes, chunk_seconds)
+    all_words = []
+    for i, (offset_sec, chunk_bytes) in enumerate(chunks):
+        if progress_cb:
+            progress_cb(i, len(chunks))
+        words, _ = transcribe_via_hf(chunk_bytes, hf_token, "audio/mpeg")
+        for w in words:
+            all_words.append({
+                "start": w["start"] + offset_sec,
+                "end": w["end"] + offset_sec,
+                "text": w["text"],
+            })
+        time.sleep(1)
+    if progress_cb:
+        progress_cb(len(chunks), len(chunks))
+    return all_words
+
+
 async def synthesize(text, voice, rate_str, pitch_str, volume_str):
     communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str, volume=volume_str)
     audio_bytes = b""
@@ -188,20 +221,25 @@ with tab2:
 
     if st.button("📝 SRT ထုတ်မည်", type="primary", use_container_width=True,
                  disabled=(audio_file is None or not hf_token)):
-        with st.spinner("အသံ နားထောင်ပြီး စာသား ထုတ်နေသည် (audio ရှည်ရင် 3-5 မိနစ်လောက် ကြာနိုင်ပါသည်)..."):
-            try:
-                audio_file.seek(0)
-                audio_bytes = audio_file.read()
-                ctype = audio_file.type or "audio/mpeg"
-                words, full_text = transcribe_via_hf(audio_bytes, hf_token, ctype)
-                if words:
-                    st.session_state.stt_srt = build_srt_from_whisper_words(words, words_per_cue2)
-                    st.success("ပြီးပါပြီ ✅")
-                else:
-                    st.warning("Word-timing data မရပါ — text ကတော့ ဒီလိုပါ: " + full_text[:200])
-            except Exception as e:
-                st.error(f"မအောင်မြင်ပါ — {e}")
-                st.caption("Token မှားနေခြင်း၊ model cold-start ဖြစ်နေခြင်း (ခဏနေမှ ပြန်စမ်းပါ)၊ သို့မဟုတ် audio ဖိုင် အရမ်းရှည်ခြင်း ဖြစ်နိုင်ပါသည်")
+        try:
+            audio_file.seek(0)
+            audio_bytes = audio_file.read()
+            progress_bar = st.progress(0, text="အသံဖိုင် ဖြတ်နေသည်...")
+
+            def update_progress(done, total):
+                pct = int((done / total) * 100) if total else 0
+                progress_bar.progress(pct, text=f"အပိုင်း {done}/{total} — transcribe လုပ်နေသည်...")
+
+            words = transcribe_long_audio_via_hf(audio_bytes, hf_token, update_progress, chunk_seconds=60)
+            progress_bar.empty()
+            if words:
+                st.session_state.stt_srt = build_srt_from_whisper_words(words, words_per_cue2)
+                st.success("ပြီးပါပြီ ✅")
+            else:
+                st.warning("Word-timing data မတွေ့ပါ")
+        except Exception as e:
+            st.error(f"မအောင်မြင်ပါ — {e}")
+            st.caption("Token မှားနေခြင်း၊ model cold-start ဖြစ်နေခြင်း (ခဏနေမှ ပြန်စမ်းပါ)၊ သို့မဟုတ် ffmpeg ပြသနာ ဖြစ်နိုင်ပါသည်")
 
     if st.session_state.stt_srt:
         st.download_button("📝 SRT ဖိုင် ဒေါင်းလုတ်", st.session_state.stt_srt, file_name="transcript.srt",
