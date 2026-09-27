@@ -2,3 +2,4 @@ streamlit
 edge-tts
 mutagen
 requests
+pydub
