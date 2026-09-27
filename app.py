@@ -19,11 +19,13 @@ text = st.text_area("📝 SCRIPT / စာသား", height=220, placeholder="�
 voice_label = st.radio("🎭 VOICE ရွေးချယ်ရန်", list(VOICES.keys()))
 voice = VOICES[voice_label]
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     rate = st.slider("⚡ အမြန်နှုန်း (RATE)", -50, 50, 0)
 with col2:
     pitch = st.slider("🎵 အသံမြင့်နိမ့် (PITCH)", -50, 50, 0)
+with col3:
+    volume = st.slider("🔊 အသံကျယ်နှုန်း (VOLUME)", -80, 0, -20)
 
 words_per_cue = st.slider("📝 တစ်ကြောင်းလျှင် စာလုံးအရေအတွက် (SRT)", 3, 15, 8)
 
@@ -77,8 +79,8 @@ def build_srt_fallback(text, total_ms, per_cue):
     return "\n".join(lines)
 
 
-async def synthesize(text, voice, rate_str, pitch_str):
-    communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str)
+async def synthesize(text, voice, rate_str, pitch_str, volume_str):
+    communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str, volume=volume_str)
     audio_bytes = b""
     words = []
     async for chunk in communicate.stream():
@@ -99,7 +101,7 @@ if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=T
     else:
         with st.spinner("အသံ ထုတ်နေသည်..."):
             audio_bytes, words = asyncio.run(
-                synthesize(text, voice, fmt(rate, "%"), fmt(pitch, "Hz"))
+                synthesize(text, voice, fmt(rate, "%"), fmt(pitch, "Hz"), fmt(volume, "%"))
             )
             if words:
                 srt_text = build_srt(words, words_per_cue)
