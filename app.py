@@ -84,24 +84,27 @@ def build_srt_from_whisper_words(words, per_cue):
 
 def transcribe_via_hf(audio_bytes, hf_token, content_type="audio/mpeg"):
     import requests
+    import base64
     api_url = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
     headers = {
         "Authorization": f"Bearer {hf_token}",
-        "Content-Type": content_type,
+        "Content-Type": "application/json",
         "X-Wait-For-Model": "true",
     }
-    params = {
-        "return_timestamps": "word",
-        "language": "my",
-        "task": "transcribe",
-        "chunk_length_s": 30,
-        "stride_length_s": 5,
+    payload = {
+        "inputs": base64.b64encode(audio_bytes).decode("utf-8"),
+        "parameters": {
+            "return_timestamps": "word",
+            "chunk_length_s": 30,
+            "stride_length_s": 5,
+            "generate_kwargs": {"language": "my", "task": "transcribe"},
+        },
     }
-    resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=600)
+    resp = requests.post(api_url, headers=headers, json=payload, timeout=600)
     if resp.status_code != 200:
         raise RuntimeError(f"{resp.status_code}: {resp.text[:300]}")
     result = resp.json()
-    if "error" in result:
+    if isinstance(result, dict) and "error" in result:
         raise RuntimeError(result["error"])
     words = []
     for chunk in result.get("chunks", []):
