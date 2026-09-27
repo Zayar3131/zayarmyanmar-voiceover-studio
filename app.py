@@ -80,10 +80,10 @@ def build_srt_from_whisper_words(words, per_cue):
     return "\n".join(lines)
 
 
-def transcribe_via_hf(audio_bytes, hf_token):
+def transcribe_via_hf(audio_bytes, hf_token, content_type="audio/mpeg"):
     import requests
     api_url = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
-    headers = {"Authorization": f"Bearer {hf_token}"}
+    headers = {"Authorization": f"Bearer {hf_token}", "Content-Type": content_type}
     params = {"return_timestamps": "word"}
     resp = requests.post(api_url, headers=headers, params=params, data=audio_bytes, timeout=120)
     if resp.status_code != 200:
@@ -188,7 +188,8 @@ with tab2:
             try:
                 audio_file.seek(0)
                 audio_bytes = audio_file.read()
-                words, full_text = transcribe_via_hf(audio_bytes, hf_token)
+                ctype = audio_file.type or "audio/mpeg"
+                words, full_text = transcribe_via_hf(audio_bytes, hf_token, ctype)
                 if words:
                     st.session_state.stt_srt = build_srt_from_whisper_words(words, words_per_cue2)
                     st.success("ပြီးပါပြီ ✅")
