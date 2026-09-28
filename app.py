@@ -20,47 +20,178 @@ def fmt(v, unit):
 
 
 def ms_to_srt_time(ms):
-    ms = max(0, ms)
-    h = int(ms // 3600000)
-    m = int((ms % 3600000) // 60000)
-    s = int((ms % 60000) // 1000)
-    msec = int(ms % 1000)
+    ms = max(0, int(round(ms)))
+    h = ms // 3600000
+    m = (ms % 3600000) // 60000
+    s = (ms % 60000) // 1000
+    msec = ms % 1000
     return f"{h:02}:{m:02}:{s:02},{msec:03}"
 
 
-def build_srt(words, per_cue):
+def prepare_text(t, flat_newlines=True, soft_commas=False):
+    if flat_newlines:
+        t = re.sub(r"\s*\n\s*", " ", t)
+    if soft_commas:
+        t = t.replace("၊", " ")
+    return re.sub(r"[ \t]+", " ", t).strip()
+
+
+def split_sentences(text, max_len=250):
+    raw = re.split(r"(?<=[။!?])\s*", text)
+    sents = []
+    for s in raw:
+        s = s.strip()
+        if not s or not re.search(r"\w", s):
+            continue
+        if len(s) <= max_len:
+            sents.append(s)
+            continue
+        buf = ""
+        for p in re.split(r"(?<=၊)\s*", s):
+            if buf and len(buf) + len(p) > max_len:
+                sents.append(buf.strip())
+                buf = p
+            else:
+                buf = (buf + " " + p).strip() if buf else p
+        if buf.strip():
+            sents.append(buf.strip())
+    return sents
+
+
+def _is_consonant(ch):
+    o = ord(ch)
+    return (0x1000 <= o <= 0x1021) or (0x1023 <= o <= 0x1027) or o in (0x1029, 0x102A, 0x103F)
+
+
+def _safe_boundary(tok, i):
+    if i <= 0 or i >= len(tok):
+        return False
+    if not _is_consonant(tok[i]):
+        return False
+    if tok[i - 1] == "\u1039":
+        return False
+    nxt = tok[i + 1] if i + 1 < len(tok) else ""
+    if nxt in ("\u103a", "\u1039"):
+        return False
+    return True
+
+
+def split_long_token(tok, max_chars):
+    parts = []
+    start = 0
+    n = len(tok)
+    while n - start > max_chars:
+        cut = None
+        for i in range(start + max_chars, start, -1):
+            if _safe_boundary(tok, i):
+                cut = i
+                break
+        if cut is None:
+            for i in range(start + max_chars + 1, n):
+                if _safe_boundary(tok, i):
+                    cut = i
+                    break
+        if cut is None:
+            break
+        parts.append(tok[start:cut])
+        start = cut
+    parts.append(tok[start:])
+    return [p for p in parts if p]
+
+
+def split_text_into_cues(text, per_cue, max_chars):
+    cues = []
+    cur = []
+
+    def flush():
+        if cur:
+            cues.append(" ".join(cur))
+            cur.clear()
+
+    for tok in text.split():
+        if len(tok) > max_chars:
+            flush()
+            cues.extend(split_long_token(tok, max_chars))
+            continue
+        if cur and (len(cur) >= per_cue or len(" ".join(cur + [tok])) > max_chars):
+            flush()
+        cur.append(tok)
+        if tok.endswith(("၊", "။")):
+            flush()
+    flush()
+    return cues
+
+
+def build_srt_from_timeline(sentences, timeline, per_cue, max_chars):
     lines = []
     idx = 1
-    i = 0
-    enders = ("။", "၊", ".", "!", "?")
-    while i < len(words):
-        group = [words[i]]
-        i += 1
-        while i < len(words) and len(group) < per_cue and not group[-1]["text"].strip().endswith(enders):
-            group.append(words[i])
-            i += 1
-        start = group[0]["offset"] / 10000
-        end = (group[-1]["offset"] + group[-1]["duration"]) / 10000
-        text_line = "".join(w["text"] for w in group).strip()
-        lines.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{text_line}\n")
-        idx += 1
+    for sent, (st_ms, en_ms) in zip(sentences, timeline):
+        cues = split_text_into_cues(sent, per_cue, max_chars)
+        if not cues:
+            continue
+        weights = [max(1, len(re.sub(r"\s", "", c))) for c in cues]
+        total = sum(weights)
+        span = en_ms - st_ms
+        t = float(st_ms)
+        for c, w in zip(cues, weights):
+            d = span * w / total
+            lines.append(f"{idx}\n{ms_to_srt_time(t)} --> {ms_to_srt_time(t + d)}\n{c}\n")
+            t += d
+            idx += 1
     return "\n".join(lines)
 
 
-def build_srt_fallback(text, total_ms, per_cue):
-    words = re.findall(r"\S+", text)
-    if not words or total_ms <= 0:
-        return ""
-    groups = [words[i:i + per_cue] for i in range(0, len(words), per_cue)]
-    ms_per_word = total_ms / len(words)
-    lines = []
+def trim_silence(seg, thresh=-50.0, keep_ms=40):
+    from pydub.silence import detect_leading_silence
+    lead = detect_leading_silence(seg, silence_threshold=thresh)
+    tail = detect_leading_silence(seg.reverse(), silence_threshold=thresh)
+    lead = max(0, lead - keep_ms)
+    tail = max(0, tail - keep_ms)
+    if len(seg) - lead - tail < 150:
+        return seg
+    return seg[lead:len(seg) - tail]
+
+
+def enhance_loudness(seg, level):
+    from pydub import effects
+    if level == "off":
+        return seg
+    if level == "medium":
+        seg = effects.compress_dynamic_range(seg, threshold=-24.0, ratio=3.0, attack=5.0, release=50.0)
+    else:
+        seg = effects.compress_dynamic_range(seg, threshold=-32.0, ratio=6.0, attack=5.0, release=50.0)
+    return effects.normalize(seg, headroom=0.5)
+
+
+def build_voiceover(mp3_list, gap_ms, loudness):
+    combined = AudioSegment.empty()
+    timeline = []
+    cursor = 0
+    for i, data in enumerate(mp3_list):
+        seg = trim_silence(AudioSegment.from_file(io.BytesIO(data), format="mp3"))
+        if i > 0 and gap_ms > 0:
+            combined += AudioSegment.silent(duration=gap_ms, frame_rate=seg.frame_rate)
+            cursor += gap_ms
+        timeline.append((cursor, cursor + len(seg)))
+        combined += seg
+        cursor += len(seg)
+    try:
+        combined = enhance_loudness(combined, loudness)
+    except Exception:
+        pass
+    buf = io.BytesIO()
+    combined.export(buf, format="mp3", bitrate="96k")
+    return buf.getvalue(), timeline
+
+
+def fallback_voiceover(mp3_list):
+    timeline = []
     cursor = 0.0
-    for idx, g in enumerate(groups, start=1):
-        start = cursor
-        end = cursor + ms_per_word * len(g)
-        lines.append(f"{idx}\n{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}\n{' '.join(g)}\n")
-        cursor = end
-    return "\n".join(lines)
+    for data in mp3_list:
+        dur = MP3(io.BytesIO(data)).info.length * 1000
+        timeline.append((cursor, cursor + dur))
+        cursor += dur
+    return b"".join(mp3_list), timeline
 
 
 def build_srt_from_whisper_words(words, per_cue):
@@ -146,16 +277,38 @@ def transcribe_long_audio_via_hf(audio_bytes, hf_token, progress_cb=None, chunk_
     return all_words
 
 
-async def synthesize(text, voice, rate_str, pitch_str, volume_str):
-    communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str, volume=volume_str)
-    audio_bytes = b""
-    words = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_bytes += chunk["data"]
-        elif chunk["type"] == "WordBoundary":
-            words.append(chunk)
-    return audio_bytes, words
+async def synth_one(sentence, voice, rate_str, pitch_str, sem, retries=3):
+    async with sem:
+        last = None
+        for attempt in range(retries):
+            try:
+                comm = edge_tts.Communicate(sentence, voice, rate=rate_str, pitch=pitch_str)
+                data = b""
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        data += chunk["data"]
+                if data:
+                    return data
+            except Exception as e:
+                last = e
+            await asyncio.sleep(0.8 * (attempt + 1))
+        raise RuntimeError(f"'{sentence[:25]}...' ထုတ်မရပါ ({last})")
+
+
+async def synth_all(sentences, voice, rate_str, pitch_str, progress_cb=None, concurrency=4):
+    sem = asyncio.Semaphore(concurrency)
+    results = [None] * len(sentences)
+    done = 0
+
+    async def worker(i, s):
+        nonlocal done
+        results[i] = await synth_one(s, voice, rate_str, pitch_str, sem)
+        done += 1
+        if progress_cb:
+            progress_cb(done, len(sentences))
+
+    await asyncio.gather(*(worker(i, s) for i, s in enumerate(sentences)))
+    return results
 
 
 st.title("🎙️ မြန်မာ Voiceover Studio")
@@ -169,41 +322,58 @@ with tab1:
     voice_label = st.radio("🎭 VOICE ရွေးချယ်ရန်", list(VOICES.keys()))
     voice = VOICES[voice_label]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     with c1:
-        rate = st.slider("⚡ RATE", -50, 50, 0)
+        rate = st.slider("⚡ RATE (အမြန်နှုန်း)", -50, 50, 0)
     with c2:
         pitch = st.slider("🎵 PITCH", -50, 50, 0)
-    with c3:
-        volume = st.slider("🔊 VOLUME", -80, 200, 0)
 
-    words_per_cue = st.slider("📝 တစ်ကြောင်းလျှင် စာလုံးအရေအတွက် (SRT)", 3, 15, 8)
+    loudness_label = st.select_slider(
+        "🔊 အသံကျယ်မှု",
+        options=["ပုံမှန်", "ကျယ်", "အလွန်ကျယ်"],
+        value="ကျယ်",
+    )
+    loudness = {"ပုံမှန်": "off", "ကျယ်": "medium", "အလွန်ကျယ်": "max"}[loudness_label]
+
+    words_per_cue = st.slider("📝 SRT တစ်ကြောင်းလျှင် စာလုံးအရေအတွက်", 3, 15, 8)
+
+    with st.expander("⚙️ အဆင့်မြင့် ချိန်ညှိချက်"):
+        gap_ms = st.slider("စာကြောင်းတစ်ခုနဲ့တစ်ခုကြား အနားယူချိန် (ms)", 0, 800, 200, step=50)
+        max_chars = st.slider("SRT တစ်ကြောင်း အများဆုံး စာလုံးရေ", 20, 100, 50)
+        flat_newlines = st.checkbox("Enter (စာကြောင်းအဆင်း) များကို ဖယ်ပြီး ဆက်တိုက်ဖတ်မည်", value=True)
+        soft_commas = st.checkbox("'၊' နေရာတွင် အနားမယူဘဲ ဆက်ဖတ်မည်", value=False)
 
     if "audio_bytes" not in st.session_state:
         st.session_state.audio_bytes = None
         st.session_state.srt_text = None
 
     if st.button("🎙️ Generate Voiceover", type="primary", use_container_width=True):
-        if not text.strip():
+        clean_text = prepare_text(text, flat_newlines, soft_commas)
+        sentences = split_sentences(clean_text)
+        if not sentences:
             st.warning("စာသား ထည့်ပါ")
         else:
-            with st.spinner("အသံ ထုတ်နေသည်..."):
-                audio_bytes, words = asyncio.run(
-                    synthesize(text, voice, fmt(rate, "%"), fmt(pitch, "Hz"), fmt(volume, "%"))
-                )
-                if words:
-                    srt_text = build_srt(words, words_per_cue)
-                else:
-                    try:
-                        total_ms = MP3(io.BytesIO(audio_bytes)).info.length * 1000
-                    except Exception:
-                        word_count = max(1, len(text.split()))
-                        speed_factor = 1 + (rate / 100)
-                        total_ms = (word_count / (1.8 * speed_factor)) * 1000
-                    srt_text = build_srt_fallback(text, total_ms, words_per_cue)
-                    st.info("Word-timing data မရလို့ SRT ကို အသံဖိုင်ရဲ့ တကယ့်ကြာချိန်ဖြင့် ဖန်တီးထားပါသည်")
-            st.session_state.audio_bytes = audio_bytes
-            st.session_state.srt_text = srt_text
+            progress = st.progress(0, text="အသံ ထုတ်နေသည်...")
+
+            def cb(done, total):
+                progress.progress(int(done / total * 90), text=f"စာကြောင်း {done}/{total} ထုတ်နေသည်...")
+
+            try:
+                mp3_list = asyncio.run(synth_all(sentences, voice, fmt(rate, "%"), fmt(pitch, "Hz"), cb))
+            except Exception as e:
+                mp3_list = None
+                progress.empty()
+                st.error(f"အသံထုတ်မရပါ — {e}")
+            if mp3_list:
+                progress.progress(95, text="အသံ ပေါင်းစပ်နေသည်...")
+                try:
+                    audio_bytes, timeline = build_voiceover(mp3_list, gap_ms, loudness)
+                except Exception as e:
+                    audio_bytes, timeline = fallback_voiceover(mp3_list)
+                    st.info(f"Audio ပြင်ဆင်မှု မအောင်မြင်လို့ ရိုးရိုးပေါင်းစပ်ထားပါသည် ({e})")
+                st.session_state.audio_bytes = audio_bytes
+                st.session_state.srt_text = build_srt_from_timeline(sentences, timeline, words_per_cue, max_chars)
+                progress.empty()
 
     if st.session_state.audio_bytes:
         st.success("ပြီးပါပြီ ✅")
