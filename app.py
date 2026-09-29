@@ -155,12 +155,12 @@ def trim_silence(seg, thresh=-50.0, keep_ms=40):
 def enhance_loudness(seg, level):
     from pydub import effects
     if level == "off":
-        return seg
+        return effects.normalize(seg, headroom=1.0)
     if level == "medium":
-        seg = effects.compress_dynamic_range(seg, threshold=-24.0, ratio=3.0, attack=5.0, release=50.0)
+        seg = effects.compress_dynamic_range(seg, threshold=-18.0, ratio=1.8, attack=8.0, release=120.0)
     else:
-        seg = effects.compress_dynamic_range(seg, threshold=-32.0, ratio=6.0, attack=5.0, release=50.0)
-    return effects.normalize(seg, headroom=0.5)
+        seg = effects.compress_dynamic_range(seg, threshold=-22.0, ratio=2.5, attack=8.0, release=120.0)
+    return effects.normalize(seg, headroom=1.0)
 
 
 def build_voiceover(mp3_list, gap_ms, loudness):
